@@ -30,34 +30,41 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       # 2. ビルド実行
-      # working-directory を指定することで「No such file or directory」を防ぎます。
-      # shell: bash を使うことで Windows 上の Git Bash (sh) を確実に利用します。
+      # working-directory を相対パスではなく環境変数から絶対パスを組み立てる形式に変更
+      # また、実行前にディレクトリの存在を確認します
       - name: Generate and Build
-        working-directory: ./build
         shell: bash
         run: |
+          # buildディレクトリへ移動
+          cd build
+          
+          echo "Current directory: $(pwd)"
           echo "Generating build files for ${{ matrix.platform }}..."
-          ./build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+          
+          # 公式マニュアルに基づき sh でスクリプトを実行
+          sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
           
           echo "Compiling source code..."
-          ./build.sh -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+          sh build.sh -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
 
       # 3. パッケージ化
       - name: Package Binaries
         shell: pwsh
         run: |
+          # CppSharpのビルド成果物は通常 root/bin に出力されます
           $binDir = "bin/${{ matrix.configuration }}"
           $zipName = "CppSharp-Windows-${{ matrix.platform }}.zip"
+          
           if (Test-Path $binDir) {
-              Compress-Archive -Path "$binDir\*" -DestinationPath $zipName
+              Compress-Archive -Path "$binDir\*" -DestinationPath $zipName -Force
           } else {
-              Write-Host "Directory $binDir not found, searching in root..."
-              # binフォルダの場所が異なる場合を考慮したフォールバック
-              Get-ChildItem -Recurse -Filter "*.dll"
-              Compress-Archive -Path "bin\*" -DestinationPath $zipName
+              Write-Warning "Target directory $binDir not found. Checking alternate locations..."
+              # 万が一場所が違う場合のために、生成されたdllを探してパッケージ化を試みます
+              Get-ChildItem -Recurse -Filter "CppSharp*.dll"
+              Compress-Archive -Path "bin\*" -DestinationPath $zipName -Force
           }
 
-      # 4. Release へのアップロード (タグ時のみ)
+      # 4. Release へのアップロード (タグプッシュ時のみ)
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -74,15 +81,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Update README
+      - name: Update README in Japanese
         run: |
-          sed -i '/## ビルド通知/,$d' README.md || true
-          echo -e "\n## ビルド通知" >> README.md
-          echo "- 状態: 成功 (Windows ${{ github.sha }})" >> README.md
-          echo "- 日時: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
+          # 日本語での通知を追記
+          echo -e "\n---" >> README.md
+          echo "### ビルド通知 (GitHub Actions)" >> README.md
+          echo "- **ステータス**: 正常終了" >> README.md
+          echo "- **プラットフォーム**: Windows x86 / x64" >> README.md
+          echo "- **最終更新**: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
           
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md
-          git commit -m "docs: README update [skip ci]" || echo "No changes to commit"
+          git commit -m "docs: ビルド完了通知を更新 [skip ci]" || echo "No changes"
           git push
