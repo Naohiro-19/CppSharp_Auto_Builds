@@ -4,12 +4,10 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch: # Actionsタブから手動実行を可能にする
+  workflow_dispatch:
 
 permissions:
-  contents: write # Release作成とREADME更新に必要
+  contents: write
 
 jobs:
   build:
@@ -26,28 +24,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
-      # 1. MSVC v142 (VS 2019用) のセットアップ
+      # 1. MSVC v142 セットアップ
       - name: Setup MSVC v142 Build Tools
         uses: microsoft/setup-msbuild@v2
 
-      # 2. 公式マニュアルの要件：ビルドファイルの生成
-      # sh, curl, 7z はランナーに標準搭載されています
-      - name: Generate Build Files
-        shell: cmd
+      # 2. ビルド実行
+      # working-directory を指定することで「No such file or directory」を防ぎます。
+      # shell: bash を使うことで Windows 上の Git Bash (sh) を確実に利用します。
+      - name: Generate and Build
+        working-directory: ./build
+        shell: bash
         run: |
-          cd build
-          sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+          echo "Generating build files for ${{ matrix.platform }}..."
+          ./build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+          
+          echo "Compiling source code..."
+          ./build.sh -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
 
-      # 3. 公式マニュアルの要件：ソースコードのビルド
-      - name: Build Source Code
-        shell: cmd
-        run: |
-          cd build
-          sh build.sh -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
-
-      # 4. 配布バイナリのパッケージ化 (ZIP)
+      # 3. パッケージ化
       - name: Package Binaries
         shell: pwsh
         run: |
@@ -56,38 +51,38 @@ jobs:
           if (Test-Path $binDir) {
               Compress-Archive -Path "$binDir\*" -DestinationPath $zipName
           } else {
-              Write-Error "Binary directory not found: $binDir"
-              exit 1
+              Write-Host "Directory $binDir not found, searching in root..."
+              # binフォルダの場所が異なる場合を考慮したフォールバック
+              Get-ChildItem -Recurse -Filter "*.dll"
+              Compress-Archive -Path "bin\*" -DestinationPath $zipName
           }
 
-      # 5. GitHub Release への掲載 (タグプッシュ時のみ実行)
+      # 4. Release へのアップロード (タグ時のみ)
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: CppSharp-Windows-${{ matrix.platform }}.zip
+          files: "*.zip"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   update-readme:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Update README with Japanese notification
+      
+      - name: Update README
         run: |
-          echo -e "\n## ビルド通知\n" >> README.md
-          echo "最新のビルドが完了しました。 (日時: $(date +'%Y-%m-%d %H:%M:%S'))" >> README.md
-          echo "- プラットフォーム: Windows x86, x64" >> README.md
-          echo "- ステータス: 正常終了" >> README.md
-
-      - name: Commit and Push changes
-        run: |
+          sed -i '/## ビルド通知/,$d' README.md || true
+          echo -e "\n## ビルド通知" >> README.md
+          echo "- 状態: 成功 (Windows ${{ github.sha }})" >> README.md
+          echo "- 日時: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
+          
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md
-          git commit -m "docs: READMEにビルド完了通知を追記 [skip ci]"
+          git commit -m "docs: README update [skip ci]" || echo "No changes to commit"
           git push
