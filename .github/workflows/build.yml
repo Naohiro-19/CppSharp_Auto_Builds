@@ -3,8 +3,7 @@ name: Build and Release CppSharp Binaries (x64 Only)
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
-  workflow_dispatch:
+  workflow_dispatch: # 手動実行ボタンも有効化
 
 permissions:
   contents: write
@@ -39,8 +38,6 @@ jobs:
           cd CppSharp/build
           
           echo "Generating build files for x64..."
-          # x64環境ではプリビルド済みのLLVMが取得される可能性が高いですが、
-          # 念のため失敗時にLLVMクローンを行う安全策を残しています。
           if ! sh build.sh generate -configuration Release -platform x64; then
             echo "Pre-built LLVM not found. Preparing LLVM from source..."
             sh build.sh clone_llvm
@@ -56,7 +53,6 @@ jobs:
           $zipName = "CppSharp-Windows-x64.zip"
           $binPath = "CppSharp/bin/Release_x64"
           
-          # パスが存在しない場合のフォールバック検索
           if (-not (Test-Path $binPath)) {
               $binPath = Get-ChildItem -Recurse -Directory -Filter "Release*" | 
                          Where-Object { $_.FullName -match "x64" } | 
@@ -71,10 +67,18 @@ jobs:
           Write-Host "Packaging from: $binPath"
           Compress-Archive -Path "$binPath\*" -DestinationPath $zipName -Force
 
-      - name: Release
+      - name: Upload to Release (latest)
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
+          tag_name: latest
+          name: Latest Automated Build
+          body: |
+            ## CppSharp x64 Build
+            このリリースは自動ビルドによって生成されました。
+            - **Build Date**: ${{ github.event.head_commit.timestamp }}
+            - **Commit**: ${{ github.sha }}
+          draft: false
+          prerelease: false
           files: "*.zip"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,7 +86,6 @@ jobs:
   update-readme:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -90,12 +93,12 @@ jobs:
         run: |
           echo -e "\n---" >> README.md
           echo "### CppSharp ビルド完了通知" >> README.md
-          echo "- **Status**: x64版バイナリ生成成功" >> README.md
+          echo "- **Status**: x64版バイナリ生成成功（Releasesにアップロード済）" >> README.md
+          echo "- **Latest Release**: [Download Here](${{ github.server_url }}/${{ github.repository }}/releases/tag/latest)" >> README.md
           echo "- **DateTime**: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
-          echo "- **Commit**: ${{ github.sha }}" >> README.md
           
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md
-          git commit -m "docs: x64ビルド完了通知 [skip ci]" || echo "No changes"
+          git commit -m "docs: x64ビルド完了・リリース更新 [skip ci]" || echo "No changes"
           git push
