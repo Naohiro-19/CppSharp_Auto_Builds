@@ -11,3 +11,9 @@
 - **Status**: x64版バイナリ生成成功（Releasesにアップロード済）
 - **Latest Release**: [Download Here](https://github.com/Naohiro-19/CppSharp_Auto_Builds/releases/tag/latest)
 - **DateTime**: 2026-01-01 12:02:18 (JST)
+
+---
+### 🚀 CppSharp 最新バイナリ公開中
+- **Status**: ビルド成功 & リリース更新完了
+- **Download**: [CppSharp-Windows-x64.zip](https://github.com/Naohiro-19/CppSharp_Auto_Builds/releases/download/latest/CppSharp-Windows-x64.zip)
+- **Last Updated**: 2026-01-01 12:13:05 (JST)
