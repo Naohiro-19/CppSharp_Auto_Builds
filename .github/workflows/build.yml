@@ -36,49 +36,57 @@ jobs:
         shell: bash
         run: |
           cd CppSharp/build
-          if ! sh build.sh generate -configuration Release -platform x64; then
-            sh build.sh clone_llvm
-            sh build.sh generate -configuration Release -platform x64
-          fi
+          # 確実にクリーンな状態で生成
+          sh build.sh generate -configuration Release -platform x64
+          
+          echo "Compiling CppSharp source code..."
+          # 実際のコンパイル実行
           sh build.sh -configuration Release -platform x64
 
-      - name: Package Binaries
-        id: package
+      - name: Collect and Package Binaries
         shell: pwsh
         run: |
-          $zipName = "CppSharp-Windows-x64.zip"
-          $binPath = "CppSharp/bin/Release_x64"
-          
-          if (-not (Test-Path $binPath)) {
-              $binPath = Get-ChildItem -Recurse -Directory -Filter "Release*" | 
-                         Where-Object { $_.FullName -match "x64" } | 
-                         Select-Object -First 1 -ExpandProperty FullName
-          }
-          
-          if ($null -eq $binPath) { exit 1 }
-          
-          # ZIP圧縮してルートディレクトリ（GITHUB_WORKSPACE）に配置
-          Compress-Archive -Path "$binPath\*" -DestinationPath "./$zipName" -Force
-          echo "ZIP_PATH=./$zipName" >> $env:GITHUB_ENV
+          $zipName = "CppSharp-Windows-x64-Full.zip"
+          $staging = "publish_staging"
+          New-Item -ItemType Directory -Path $staging -Force
 
-      # ここが重要：ビルドしたファイルを Release ページに公開紐付けする
+          # 1. CppSharp のメインバイナリを収集 (Release_x64)
+          # binフォルダ以下にある全.dll, .exe, .libをステージングへコピー
+          Write-Host "Collecting binaries..."
+          Get-ChildItem -Path "CppSharp/bin" -Recurse -Include *.dll, *.exe, *.lib, *.pdb | 
+            Copy-Item -Destination $staging -Force
+
+          # 2. LLVM/Clang 等の依存関係も漏らさず収集 (もし別フォルダにある場合)
+          # build/lib フォルダなども探索対象に含める
+          if (Test-Path "CppSharp/build/lib") {
+              Get-ChildItem -Path "CppSharp/build/lib" -Recurse -Include *.dll | 
+                Copy-Item -Destination $staging -Force
+          }
+
+          # 3. 容量チェック (1MB以下なら失敗とみなす)
+          $totalSize = (Get-ChildItem $staging -Recurse | Measure-Object -Property Length -Sum).Sum
+          Write-Host "Total package size: $($totalSize / 1KB) KB"
+          if ($totalSize -lt 1MB) {
+              Write-Error "Binary collection failed. Resulting package is too small ($($totalSize / 1KB) KB)."
+              exit 1
+          }
+
+          # パッケージング
+          Compress-Archive -Path "$staging\*" -DestinationPath $zipName -Force
+
       - name: Upload to Release (latest)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: CppSharp x64 Stable Build
+          name: Latest Automated Build
           body: |
-            ### 🛠 Automated Build Details
-            CppSharpの最新ビルド済みバイナリ（x64）です。
-            
+            ## CppSharp x64 Build (Binary Package)
+            このビルドには CppSharp の実行に必要なバイナリが含まれています。
             - **Build Date**: ${{ github.event.head_commit.timestamp }}
             - **Commit**: ${{ github.sha }}
-            
-            下欄の **Assets** から ZIP ファイルをダウンロードしてください。
           draft: false
           prerelease: false
-          files: |
-            CppSharp-Windows-x64.zip
+          files: "*.zip"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -91,13 +99,12 @@ jobs:
       - name: Update README
         run: |
           echo -e "\n---" >> README.md
-          echo "### 🚀 CppSharp 最新バイナリ公開中" >> README.md
-          echo "- **Status**: ビルド成功 & リリース更新完了" >> README.md
-          echo "- **Download**: [CppSharp-Windows-x64.zip](${{ github.server_url }}/${{ github.repository }}/releases/download/latest/CppSharp-Windows-x64.zip)" >> README.md
-          echo "- **Last Updated**: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
+          echo "### CppSharp ビルド完了通知" >> README.md
+          echo "- **Status**: x64版フルバイナリ生成成功" >> README.md
+          echo "- **Download**: [CppSharp-Windows-x64-Full.zip](${{ github.server_url }}/${{ github.repository }}/releases/download/latest/CppSharp-Windows-x64-Full.zip)" >> README.md
           
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md
-          git commit -m "docs: Releaseリンク更新 [skip ci]" || echo "No changes"
+          git commit -m "docs: x64ビルド完了・リンク更新 [skip ci]" || echo "No changes"
           git push
