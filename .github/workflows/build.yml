@@ -24,24 +24,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       # 1. MSVC v142 セットアップ
       - name: Setup MSVC v142 Build Tools
         uses: microsoft/setup-msbuild@v2
 
-      # 2. ビルド実行
-      # working-directory を相対パスではなく環境変数から絶対パスを組み立てる形式に変更
-      # また、実行前にディレクトリの存在を確認します
+      # 2. ディレクトリ構造の確認とビルド実行
+      # buildフォルダが見つからない場合でも、リポジトリ全体を検索して実行します
       - name: Generate and Build
         shell: bash
         run: |
-          # buildディレクトリへ移動
-          cd build
+          echo "Checking directory structure..."
+          ls -R | grep ":$" | head -n 20 # 構造をログに出力して確認
           
-          echo "Current directory: $(pwd)"
+          # buildディレクトリを探す（リポジトリ直下にない場合を考慮）
+          BUILD_DIR=$(find . -name "build.sh" -printf '%h\n' | head -n 1)
+          
+          if [ -z "$BUILD_DIR" ]; then
+            echo "Error: build.sh not found in the repository."
+            exit 1
+          fi
+          
+          echo "Found build.sh in: $BUILD_DIR"
+          cd "$BUILD_DIR"
+          
           echo "Generating build files for ${{ matrix.platform }}..."
-          
-          # 公式マニュアルに基づき sh でスクリプトを実行
           sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
           
           echo "Compiling source code..."
@@ -51,20 +59,23 @@ jobs:
       - name: Package Binaries
         shell: pwsh
         run: |
-          # CppSharpのビルド成果物は通常 root/bin に出力されます
-          $binDir = "bin/${{ matrix.configuration }}"
+          # ビルド成果物(dll/exe)を再帰的に探してzipにまとめます
           $zipName = "CppSharp-Windows-${{ matrix.platform }}.zip"
+          mkdir dist_temp
           
-          if (Test-Path $binDir) {
-              Compress-Archive -Path "$binDir\*" -DestinationPath $zipName -Force
-          } else {
-              Write-Warning "Target directory $binDir not found. Checking alternate locations..."
-              # 万が一場所が違う場合のために、生成されたdllを探してパッケージ化を試みます
-              Get-ChildItem -Recurse -Filter "CppSharp*.dll"
-              Compress-Archive -Path "bin\*" -DestinationPath $zipName -Force
+          # Releaseビルドの成果物を収集
+          Get-ChildItem -Recurse -Filter "CppSharp*.dll" | Copy-Item -Destination dist_temp/
+          Get-ChildItem -Recurse -Filter "CppSharp*.exe" | Copy-Item -Destination dist_temp/
+          
+          if ((Get-ChildItem dist_temp).Count -eq 0) {
+              Write-Error "No binaries found to package."
+              exit 1
           }
+          
+          Compress-Archive -Path "dist_temp\*" -DestinationPath $zipName -Force
+          Write-Host "Created $zipName"
 
-      # 4. Release へのアップロード (タグプッシュ時のみ)
+      # 4. Release へのアップロード
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -81,17 +92,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Update README in Japanese
+      - name: Update README
         run: |
-          # 日本語での通知を追記
           echo -e "\n---" >> README.md
-          echo "### ビルド通知 (GitHub Actions)" >> README.md
-          echo "- **ステータス**: 正常終了" >> README.md
-          echo "- **プラットフォーム**: Windows x86 / x64" >> README.md
-          echo "- **最終更新**: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
+          echo "### ビルド通知" >> README.md
+          echo "- **ステータス**: 成功" >> README.md
+          echo "- **プラットフォーム**: Windows ${{ matrix.platform }}" >> README.md
+          echo "- **更新日**: $(date +'%Y-%m-%d %H:%M:%S')" >> README.md
           
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md
-          git commit -m "docs: ビルド完了通知を更新 [skip ci]" || echo "No changes"
+          git commit -m "docs: build notification [skip ci]" || echo "No changes"
           git push
