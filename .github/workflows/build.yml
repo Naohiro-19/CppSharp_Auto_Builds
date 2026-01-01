@@ -2,19 +2,22 @@ name: Build and Release CppSharp Binaries
 
 on:
   push:
-    tags:
-      - 'v*' # v1.0.0 のようなタグがプッシュされた時に起動
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: # Actionsタブから手動実行を可能にする
 
 permissions:
-  contents: write
+  contents: write # Release作成とREADME更新に必要
 
 jobs:
   build:
     name: Build (${{ matrix.platform }})
     runs-on: windows-2022
     strategy:
+      fail-fast: false
       matrix:
-        # 32ビット(x86)と64ビット(x64)の両方をターゲットにする
         platform: [x86, x64]
         configuration: [Release]
 
@@ -23,57 +26,68 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      # 1. Visual Studio 2019 ビルドツール (v142) のセットアップ
-      # 公式マニュアルに基づき、MSVC v142 をインストールします
+      # 1. MSVC v142 (VS 2019用) のセットアップ
       - name: Setup MSVC v142 Build Tools
         uses: microsoft/setup-msbuild@v2
 
-      # 2. 依存関係の解決 (sh, curl, 7-Zip は Windows Runner に標準搭載)
-      # Git for Windows の sh.exe を利用できるようにパスを確認
-      - name: Add Shell to PATH
-        run: echo "C:\Program Files\Git\bin" >> $GITHUB_PATH
-        shell: bash
-
-      # 3. ビルドファイルの生成 (Generate build files)
-      # 公式マニュアルの build.sh generate を実行
-      - name: Generate build files
+      # 2. 公式マニュアルの要件：ビルドファイルの生成
+      # sh, curl, 7z はランナーに標準搭載されています
+      - name: Generate Build Files
+        shell: cmd
         run: |
           cd build
           sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
-        shell: cmd
 
-      # 4. ソースコードのコンパイル
-      # 公式マニュアルの build.sh (compile) を実行
-      - name: Compile source code
+      # 3. 公式マニュアルの要件：ソースコードのビルド
+      - name: Build Source Code
+        shell: cmd
         run: |
           cd build
           sh build.sh -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
-        shell: cmd
 
-      # 5. アーティファクトの準備
-      # 配布用にビルド成果物をZIPにまとめます（出力先はCppSharpの構成に依存）
-      - name: Prepare Package
+      # 4. 配布バイナリのパッケージ化 (ZIP)
+      - name: Package Binaries
+        shell: pwsh
         run: |
-          mkdir dist
-          xcopy bin\${{ matrix.configuration }}\* dist\ /E /Y
-          7z a CppSharp-Windows-${{ matrix.platform }}.zip .\dist\*
+          $binDir = "bin/${{ matrix.configuration }}"
+          $zipName = "CppSharp-Windows-${{ matrix.platform }}.zip"
+          if (Test-Path $binDir) {
+              Compress-Archive -Path "$binDir\*" -DestinationPath $zipName
+          } else {
+              Write-Error "Binary directory not found: $binDir"
+              exit 1
+          }
 
-      # 6. GitHub Release へのアップロード
-      - name: Upload to Release
+      # 5. GitHub Release への掲載 (タグプッシュ時のみ実行)
+      - name: Release
         uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: CppSharp-Windows-${{ matrix.platform }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  notify:
+  update-readme:
     needs: build
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     steps:
-      - name: Update README with Japanese Notification
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update README with Japanese notification
         run: |
-          echo "## ビルド完了通知" > notification.txt
-          echo "最新のバイナリ（x86/x64）が正常にビルドされ、Releaseページに掲載されました。" >> notification.txt
-          echo "ビルド日時: $(date)" >> notification.txt
-        # 注: READMEを直接書き換える場合は、ここで git commit/push の処理を追加可能です。
+          echo -e "\n## ビルド通知\n" >> README.md
+          echo "最新のビルドが完了しました。 (日時: $(date +'%Y-%m-%d %H:%M:%S'))" >> README.md
+          echo "- プラットフォーム: Windows x86, x64" >> README.md
+          echo "- ステータス: 正常終了" >> README.md
+
+      - name: Commit and Push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add README.md
+          git commit -m "docs: READMEにビルド完了通知を追記 [skip ci]"
+          git push
