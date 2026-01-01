@@ -20,12 +20,9 @@ jobs:
         configuration: [Release]
 
     steps:
-      # 1. あなたのリポジトリをチェックアウト
       - name: Checkout your repository
         uses: actions/checkout@v4
 
-      # 2. 公式マニュアルに基づき、CppSharp本体をクローン
-      # リポジトリが空の場合でも、ここで本体を取得します
       - name: Clone CppSharp Repository
         shell: bash
         run: |
@@ -33,43 +30,60 @@ jobs:
             git clone --recursive https://github.com/mono/CppSharp.git CppSharp
           fi
 
-      # 3. MSVC v142 セットアップ
       - name: Setup MSVC v142 Build Tools
         uses: microsoft/setup-msbuild@v2
 
-      # 4. 生成とビルド (公式マニュアルのコマンドをCppSharpディレクトリ内で実行)
+      # LLVMのビルドには Python と CMake が必要です
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Generate and Build
         shell: bash
         run: |
           cd CppSharp/build
           
-          echo "Current directory: $(pwd)"
+          # x86版でLLVMバイナリがない場合、ソースからビルドを試みる
+          if [ "${{ matrix.platform }}" == "x86" ]; then
+            echo "Detected x86 platform. Checking LLVM availability..."
+            # generateを一度試して失敗（LLVM unavailable）を検知した場合にLLVMビルドを実行
+            if ! sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}; then
+              echo "LLVM pre-built package not found. Building LLVM from source (this may take a while)..."
+              sh build.sh clone_llvm
+              sh build.sh build_llvm -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+              # LLVMビルド後に再度プロジェクト生成
+              sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+            fi
+          else
+            # x64は通常通り実行
+            echo "Generating build files for ${{ matrix.platform }}..."
+            sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+          fi
           
-          # 依存関係（LLVM等）のダウンロードとプロジェクト生成
-          echo "Generating build files for ${{ matrix.platform }}..."
-          sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
-          
-          # ビルドの実行
-          echo "Compiling source code..."
+          echo "Compiling CppSharp source code..."
           sh build.sh -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
 
-      # 5. パッケージ化
       - name: Package Binaries
         shell: pwsh
         run: |
           $zipName = "CppSharp-Windows-${{ matrix.platform }}.zip"
-          # CppSharpの出力先(binフォルダ)をターゲットにします
+          # 成果物パスを柔軟に検索
           $binPath = "CppSharp/bin/${{ matrix.configuration }}_${{ matrix.platform }}"
-          
-          # フォルダが存在しない場合の予備サーチ
           if (-not (Test-Path $binPath)) {
-              $binPath = Get-ChildItem -Recurse -Directory -Filter "Release" | Select-Object -First 1 -ExpandProperty FullName
+              $binPath = Get-ChildItem -Recurse -Directory -Filter "${{ matrix.configuration }}*" | 
+                         Where-Object { $_.FullName -match "${{ matrix.platform }}" } | 
+                         Select-Object -First 1 -ExpandProperty FullName
+          }
+          
+          if ($null -eq $binPath) { 
+              Write-Error "Binary output directory not found."
+              exit 1 
           }
           
           Write-Host "Packaging from: $binPath"
           Compress-Archive -Path "$binPath\*" -DestinationPath $zipName -Force
 
-      # 6. Release へのアップロード (タグ時のみ)
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -88,11 +102,13 @@ jobs:
       - name: Update README
         run: |
           echo -e "\n---" >> README.md
-          echo "### CppSharp ビルド通知" >> README.md
-          echo "- **Status**: ビルド完了" >> README.md
-          echo "- **Date**: $(date)" >> README.md
+          echo "### CppSharp ビルド完了通知" >> README.md
+          echo "- **Status**: 32/64bit版バイナリ生成成功" >> README.md
+          echo "- **DateTime**: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
+          echo "- **Commit**: ${{ github.sha }}" >> README.md
+          
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md
-          git commit -m "docs: update build status [skip ci]" || echo "No changes"
+          git commit -m "docs: 32/64bitビルド完了通知 [skip ci]" || echo "No changes"
           git push
