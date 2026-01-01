@@ -1,4 +1,4 @@
-name: Build and Release CppSharp Binaries
+name: Build and Release CppSharp Binaries (x64 Only)
 
 on:
   push:
@@ -11,13 +11,8 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ matrix.platform }})
+    name: Build (x64)
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [x86, x64]
-        configuration: [Release]
 
     steps:
       - name: Checkout your repository
@@ -33,46 +28,38 @@ jobs:
       - name: Setup MSVC v142 Build Tools
         uses: microsoft/setup-msbuild@v2
 
-      # LLVMのビルドには Python と CMake が必要です
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Generate and Build
+      - name: Generate and Build (x64)
         shell: bash
         run: |
           cd CppSharp/build
           
-          # x86版でLLVMバイナリがない場合、ソースからビルドを試みる
-          if [ "${{ matrix.platform }}" == "x86" ]; then
-            echo "Detected x86 platform. Checking LLVM availability..."
-            # generateを一度試して失敗（LLVM unavailable）を検知した場合にLLVMビルドを実行
-            if ! sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}; then
-              echo "LLVM pre-built package not found. Building LLVM from source (this may take a while)..."
-              sh build.sh clone_llvm
-              sh build.sh build_llvm -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
-              # LLVMビルド後に再度プロジェクト生成
-              sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
-            fi
-          else
-            # x64は通常通り実行
-            echo "Generating build files for ${{ matrix.platform }}..."
-            sh build.sh generate -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+          echo "Generating build files for x64..."
+          # x64環境ではプリビルド済みのLLVMが取得される可能性が高いですが、
+          # 念のため失敗時にLLVMクローンを行う安全策を残しています。
+          if ! sh build.sh generate -configuration Release -platform x64; then
+            echo "Pre-built LLVM not found. Preparing LLVM from source..."
+            sh build.sh clone_llvm
+            sh build.sh generate -configuration Release -platform x64
           fi
           
           echo "Compiling CppSharp source code..."
-          sh build.sh -configuration ${{ matrix.configuration }} -platform ${{ matrix.platform }}
+          sh build.sh -configuration Release -platform x64
 
       - name: Package Binaries
         shell: pwsh
         run: |
-          $zipName = "CppSharp-Windows-${{ matrix.platform }}.zip"
-          # 成果物パスを柔軟に検索
-          $binPath = "CppSharp/bin/${{ matrix.configuration }}_${{ matrix.platform }}"
+          $zipName = "CppSharp-Windows-x64.zip"
+          $binPath = "CppSharp/bin/Release_x64"
+          
+          # パスが存在しない場合のフォールバック検索
           if (-not (Test-Path $binPath)) {
-              $binPath = Get-ChildItem -Recurse -Directory -Filter "${{ matrix.configuration }}*" | 
-                         Where-Object { $_.FullName -match "${{ matrix.platform }}" } | 
+              $binPath = Get-ChildItem -Recurse -Directory -Filter "Release*" | 
+                         Where-Object { $_.FullName -match "x64" } | 
                          Select-Object -First 1 -ExpandProperty FullName
           }
           
@@ -103,12 +90,12 @@ jobs:
         run: |
           echo -e "\n---" >> README.md
           echo "### CppSharp ビルド完了通知" >> README.md
-          echo "- **Status**: 32/64bit版バイナリ生成成功" >> README.md
+          echo "- **Status**: x64版バイナリ生成成功" >> README.md
           echo "- **DateTime**: $(date +'%Y-%m-%d %H:%M:%S') (JST)" >> README.md
           echo "- **Commit**: ${{ github.sha }}" >> README.md
           
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md
-          git commit -m "docs: 32/64bitビルド完了通知 [skip ci]" || echo "No changes"
+          git commit -m "docs: x64ビルド完了通知 [skip ci]" || echo "No changes"
           git push
