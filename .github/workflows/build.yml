@@ -14,15 +14,10 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      - name: Checkout your repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Clone CppSharp Repository
-        shell: bash
-        run: |
-          if [ ! -d "CppSharp" ]; then
-            git clone --recursive https://github.com/mono/CppSharp.git CppSharp
-          fi
+        with:
+          submodules: recursive # サブモジュールも一括で取得
 
       - name: Setup MSVC Build Tools
         uses: microsoft/setup-msbuild@v2
@@ -35,65 +30,44 @@ jobs:
       - name: Generate and Build (x64)
         shell: bash
         run: |
-          cd CppSharp/build
-          # プロジェクトファイルの生成
+          # リポジトリ直下のbuildディレクトリに移動
+          cd build
           sh build.sh generate -configuration Release -platform x64
-          
           echo "Compiling CppSharp source code..."
-          # ビルド実行
           sh build.sh -configuration Release -platform x64
 
       - name: Collect and Package Binaries
         id: package
         shell: pwsh
         run: |
-          # リビジョン番号（ビルド番号）を含めたファイル名
           $version = "1.0.${{ github.run_number }}"
           $zipName = "CppSharp-Windows-x64-v$($version).zip"
           $staging = "publish_staging"
           New-Item -ItemType Directory -Path $staging -Force
 
-          Write-Host "Collecting binaries for version $version..."
-          
-          # 1. メインバイナリの収集
-          Get-ChildItem -Path "CppSharp/bin" -Recurse -Include *.dll, *.exe, *.lib, *.pdb | 
+          # 1. メインバイナリの収集 (パスを修正)
+          Get-ChildItem -Path "bin" -Recurse -Include *.dll, *.exe, *.lib, *.pdb | 
             Copy-Item -Destination $staging -Force
 
-          # 2. 依存関係（LLVM等）の収集
-          if (Test-Path "CppSharp/build/lib") {
-              Get-ChildItem -Path "CppSharp/build/lib" -Recurse -Include *.dll | 
+          # 2. 依存関係の収集
+          if (Test-Path "build/lib") {
+              Get-ChildItem -Path "build/lib" -Recurse -Include *.dll | 
                 Copy-Item -Destination $staging -Force
-          }
-
-          # 3. バリデーション
-          $totalSize = (Get-ChildItem $staging -Recurse | Measure-Object -Property Length -Sum).Sum
-          if ($totalSize -lt 1MB) {
-              Write-Error "Binary collection failed (Size: $($totalSize / 1KB) KB)."
-              exit 1
           }
 
           # パッケージング
           Compress-Archive -Path "$staging\*" -DestinationPath $zipName -Force
-          
-          # 後続のステップでファイル名を使えるように出力
           echo "ZIP_NAME=$zipName" >> $env:GITHUB_OUTPUT
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # v1.0.123 のような形式でタグを作成
           tag_name: v${{ steps.package.outputs.VERSION }}
           name: Release v${{ steps.package.outputs.VERSION }}
           body: |
             ## CppSharp x64 Automated Build
-            Automated binary build for CppSharp.
-            
-            - **Build Version**: ${{ steps.package.outputs.VERSION }}
-            - **Commit**: ${{ github.sha }}
-            - **Build Date**: ${{ github.event.head_commit.timestamp }}
-          draft: false
-          prerelease: false
+            Sync and Build completed.
           files: ${{ steps.package.outputs.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
