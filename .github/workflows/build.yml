@@ -16,9 +16,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
+
+      - name: Clone CppSharp Repository
+        shell: bash
+        run: |
+          # 混乱を避けるため、一旦削除してからクローン（サブモジュール含む）
+          rm -rf CppSharp_Source
+          git clone --recursive https://github.com/mono/CppSharp.git CppSharp_Source
 
       - name: Setup MSVC Build Tools
         uses: microsoft/setup-msbuild@v2
@@ -31,23 +35,15 @@ jobs:
       - name: Generate and Build (x64)
         shell: bash
         run: |
-          # build.sh があるディレクトリを探して移動する
-          BUILD_SH_PATH=$(find . -name "build.sh" | grep "build/build.sh" | head -n 1)
-          if [ -z "$BUILD_SH_PATH" ]; then
-            echo "Error: build.sh not found in any build directory."
-            exit 1
-          fi
+          cd CppSharp_Source/build
+          # 実行権限を付与（念のため）
+          chmod +x build.sh
           
-          BUILD_DIR=$(dirname "$BUILD_SH_PATH")
-          echo "Found build directory at: $BUILD_DIR"
-          cd "$BUILD_DIR"
-          
-          # プロジェクトファイルの生成
-          sh build.sh generate -configuration Release -platform x64
+          echo "Generating project files..."
+          ./build.sh generate -configuration Release -platform x64
           
           echo "Compiling CppSharp source code..."
-          # ビルド実行
-          sh build.sh -configuration Release -platform x64
+          ./build.sh -configuration Release -platform x64
 
       - name: Collect and Package Binaries
         id: package
@@ -58,21 +54,17 @@ jobs:
           $staging = "publish_staging"
           New-Item -ItemType Directory -Path $staging -Force
 
-          # どこにバイナリができても見つけられるようにルートから検索して収集
-          Write-Host "Searching for binaries..."
-          $targetExtensions = @("*.dll", "*.exe", "*.lib", "*.pdb")
+          Write-Host "Collecting binaries..."
+          # CppSharp_Source内のbinとlibを探索
+          $srcPath = "CppSharp_Source"
           
-          # binフォルダやbuild/libフォルダから収集
-          Get-ChildItem -Path "." -Recurse -Include $targetExtensions | 
-            Where-Object { $_.FullName -notlike "*$staging*" } |
-            ForEach-Object { 
-              Copy-Item $_.FullName -Destination $staging -Force 
-            }
+          # DLL, EXE, LIB, PDBを収集
+          Get-ChildItem -Path "$srcPath/bin", "$srcPath/build/lib" -Recurse -Include *.dll, *.exe, *.lib, *.pdb -ErrorAction SilentlyContinue | 
+            Copy-Item -Destination $staging -Force
 
-          # バリデーション
-          $files = Get-ChildItem $staging
-          if ($files.Count -eq 0) {
-              Write-Error "No binaries collected!"
+          # 成果物があるか確認
+          if ((Get-ChildItem $staging).Count -eq 0) {
+              Write-Error "No binaries found! Build might have failed without throwing an error."
               exit 1
           }
 
@@ -87,8 +79,8 @@ jobs:
           name: Release v${{ steps.package.outputs.VERSION }}
           body: |
             ## CppSharp x64 Automated Build
-            - Build Version: ${{ steps.package.outputs.VERSION }}
-            - Commit: ${{ github.sha }}
+            - Build Version: v${{ steps.package.outputs.VERSION }}
+            - Based on latest upstream CppSharp
           files: ${{ steps.package.outputs.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
