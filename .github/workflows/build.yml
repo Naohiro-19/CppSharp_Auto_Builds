@@ -17,7 +17,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive # サブモジュールも一括で取得
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Setup MSVC Build Tools
         uses: microsoft/setup-msbuild@v2
@@ -30,10 +31,22 @@ jobs:
       - name: Generate and Build (x64)
         shell: bash
         run: |
-          # リポジトリ直下のbuildディレクトリに移動
-          cd build
+          # build.sh があるディレクトリを探して移動する
+          BUILD_SH_PATH=$(find . -name "build.sh" | grep "build/build.sh" | head -n 1)
+          if [ -z "$BUILD_SH_PATH" ]; then
+            echo "Error: build.sh not found in any build directory."
+            exit 1
+          fi
+          
+          BUILD_DIR=$(dirname "$BUILD_SH_PATH")
+          echo "Found build directory at: $BUILD_DIR"
+          cd "$BUILD_DIR"
+          
+          # プロジェクトファイルの生成
           sh build.sh generate -configuration Release -platform x64
+          
           echo "Compiling CppSharp source code..."
+          # ビルド実行
           sh build.sh -configuration Release -platform x64
 
       - name: Collect and Package Binaries
@@ -45,17 +58,24 @@ jobs:
           $staging = "publish_staging"
           New-Item -ItemType Directory -Path $staging -Force
 
-          # 1. メインバイナリの収集 (パスを修正)
-          Get-ChildItem -Path "bin" -Recurse -Include *.dll, *.exe, *.lib, *.pdb | 
-            Copy-Item -Destination $staging -Force
+          # どこにバイナリができても見つけられるようにルートから検索して収集
+          Write-Host "Searching for binaries..."
+          $targetExtensions = @("*.dll", "*.exe", "*.lib", "*.pdb")
+          
+          # binフォルダやbuild/libフォルダから収集
+          Get-ChildItem -Path "." -Recurse -Include $targetExtensions | 
+            Where-Object { $_.FullName -notlike "*$staging*" } |
+            ForEach-Object { 
+              Copy-Item $_.FullName -Destination $staging -Force 
+            }
 
-          # 2. 依存関係の収集
-          if (Test-Path "build/lib") {
-              Get-ChildItem -Path "build/lib" -Recurse -Include *.dll | 
-                Copy-Item -Destination $staging -Force
+          # バリデーション
+          $files = Get-ChildItem $staging
+          if ($files.Count -eq 0) {
+              Write-Error "No binaries collected!"
+              exit 1
           }
 
-          # パッケージング
           Compress-Archive -Path "$staging\*" -DestinationPath $zipName -Force
           echo "ZIP_NAME=$zipName" >> $env:GITHUB_OUTPUT
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
@@ -67,7 +87,8 @@ jobs:
           name: Release v${{ steps.package.outputs.VERSION }}
           body: |
             ## CppSharp x64 Automated Build
-            Sync and Build completed.
+            - Build Version: ${{ steps.package.outputs.VERSION }}
+            - Commit: ${{ github.sha }}
           files: ${{ steps.package.outputs.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
