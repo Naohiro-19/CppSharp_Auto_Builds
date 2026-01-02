@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout your repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Clone CppSharp Repository
         shell: bash
@@ -24,11 +24,11 @@ jobs:
             git clone --recursive https://github.com/mono/CppSharp.git CppSharp
           fi
 
-      - name: Setup MSVC v142 Build Tools
+      - name: Setup MSVC Build Tools
         uses: microsoft/setup-msbuild@v2
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
@@ -36,75 +36,64 @@ jobs:
         shell: bash
         run: |
           cd CppSharp/build
-          # 確実にクリーンな状態で生成
+          # プロジェクトファイルの生成
           sh build.sh generate -configuration Release -platform x64
           
           echo "Compiling CppSharp source code..."
-          # 実際のコンパイル実行
+          # ビルド実行
           sh build.sh -configuration Release -platform x64
 
       - name: Collect and Package Binaries
+        id: package
         shell: pwsh
         run: |
-          $zipName = "CppSharp-Windows-x64-Full.zip"
+          # リビジョン番号（ビルド番号）を含めたファイル名
+          $version = "1.0.${{ github.run_number }}"
+          $zipName = "CppSharp-Windows-x64-v$($version).zip"
           $staging = "publish_staging"
           New-Item -ItemType Directory -Path $staging -Force
 
-          # 1. CppSharp のメインバイナリを収集 (Release_x64)
-          # binフォルダ以下にある全.dll, .exe, .libをステージングへコピー
-          Write-Host "Collecting binaries..."
+          Write-Host "Collecting binaries for version $version..."
+          
+          # 1. メインバイナリの収集
           Get-ChildItem -Path "CppSharp/bin" -Recurse -Include *.dll, *.exe, *.lib, *.pdb | 
             Copy-Item -Destination $staging -Force
 
-          # 2. LLVM/Clang 等の依存関係も漏らさず収集 (もし別フォルダにある場合)
-          # build/lib フォルダなども探索対象に含める
+          # 2. 依存関係（LLVM等）の収集
           if (Test-Path "CppSharp/build/lib") {
               Get-ChildItem -Path "CppSharp/build/lib" -Recurse -Include *.dll | 
                 Copy-Item -Destination $staging -Force
           }
 
-          # 3. 容量チェック (1MB以下なら失敗とみなす)
+          # 3. バリデーション
           $totalSize = (Get-ChildItem $staging -Recurse | Measure-Object -Property Length -Sum).Sum
-          Write-Host "Total package size: $($totalSize / 1KB) KB"
           if ($totalSize -lt 1MB) {
-              Write-Error "Binary collection failed. Resulting package is too small ($($totalSize / 1KB) KB)."
+              Write-Error "Binary collection failed (Size: $($totalSize / 1KB) KB)."
               exit 1
           }
 
           # パッケージング
           Compress-Archive -Path "$staging\*" -DestinationPath $zipName -Force
+          
+          # 後続のステップでファイル名を使えるように出力
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_OUTPUT
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Upload to Release (latest)
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Latest Automated Build
+          # v1.0.123 のような形式でタグを作成
+          tag_name: v${{ steps.package.outputs.VERSION }}
+          name: Release v${{ steps.package.outputs.VERSION }}
           body: |
-            ## CppSharp x64 Build (Binary Package)
-            このビルドには CppSharp の実行に必要なバイナリが含まれています。
-            - **Build Date**: ${{ github.event.head_commit.timestamp }}
+            ## CppSharp x64 Automated Build
+            Automated binary build for CppSharp.
+            
+            - **Build Version**: ${{ steps.package.outputs.VERSION }}
             - **Commit**: ${{ github.sha }}
+            - **Build Date**: ${{ github.event.head_commit.timestamp }}
           draft: false
           prerelease: false
-          files: "*.zip"
+          files: ${{ steps.package.outputs.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  update-readme:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - name: Update README
-        run: |
-          echo -e "\n---" >> README.md
-          echo "### CppSharp ビルド完了通知" >> README.md
-          echo "- **Status**: x64版フルバイナリ生成成功" >> README.md
-          echo "- **Download**: [CppSharp-Windows-x64-Full.zip](${{ github.server_url }}/${{ github.repository }}/releases/download/latest/CppSharp-Windows-x64-Full.zip)" >> README.md
-          
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add README.md
-          git commit -m "docs: x64ビルド完了・リンク更新 [skip ci]" || echo "No changes"
-          git push
