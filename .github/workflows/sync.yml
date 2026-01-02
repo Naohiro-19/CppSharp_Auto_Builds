@@ -1,7 +1,7 @@
 name: Sync with Upstream
 on:
   schedule:
-    - cron: '0 0 * * *' # 定期的にチェック
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
@@ -12,11 +12,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 連鎖起動のためにPATを使う場合はここに追加
+          # token: ${{ secrets.PAT_TOKEN }}
+
       - name: Sync upstream
         run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/mono/CppSharp.git
           git fetch upstream
           git checkout main
-          # 差分がある場合のみマージしてpush
-          git merge upstream/main
+          git merge upstream/main --ff-only || git merge upstream/main --no-edit
           git push origin main
