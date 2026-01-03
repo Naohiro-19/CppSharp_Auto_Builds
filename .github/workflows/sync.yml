@@ -13,15 +13,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # 連鎖起動のためにPATを使う場合はここに追加
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Sync upstream
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 既にリモートがある場合は削除してから追加（エラー128対策）
+          git remote remove upstream || true
           git remote add upstream https://github.com/mono/CppSharp.git
-          git fetch upstream
-          git checkout main
-          git merge upstream/main --ff-only || git merge upstream/main --no-edit
+          
+          # 本家の最新情報を取得
+          git fetch upstream main
+          
+          # 強制的に自分の main ブランチに切り替え
+          git checkout -B main origin/main
+          
+          # 本家の main をマージ（コンフリクト時は本家を優先する戦略）
+          echo "Merging upstream/main..."
+          git merge upstream/main --no-edit -X theirs || {
+            echo "Merge failed"
+            exit 1
+          }
+          
+          # 自分のリポジトリへ反映
           git push origin main
