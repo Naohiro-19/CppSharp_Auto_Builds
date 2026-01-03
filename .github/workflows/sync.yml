@@ -1,4 +1,21 @@
-- name: Sync upstream
+name: Sync Upstream
+
+on:
+  schedule:
+    # 毎日 UTC 00:00 (日本時間 09:00) に実行
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 手動実行も可能にしておくと便利です
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 全履歴を取得（マージに必要）
+
+      - name: Sync upstream
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
