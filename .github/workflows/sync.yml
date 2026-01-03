@@ -20,22 +20,15 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 既にリモートがある場合は削除してから追加（エラー128対策）
-          git remote remove upstream || true
-          git remote add upstream https://github.com/mono/CppSharp.git
-          
-          # 本家の最新情報を取得
+          git remote add upstream https://github.com/mono/CppSharp.git || true
           git fetch upstream main
           
-          # 強制的に自分の main ブランチに切り替え
-          git checkout -B main origin/main
+          # mainブランチを確実に選択
+          git checkout main
           
-          # 本家の main をマージ（コンフリクト時は本家を優先する戦略）
-          echo "Merging upstream/main..."
-          git merge upstream/main --no-edit -X theirs || {
-            echo "Merge failed"
-            exit 1
-          }
+          # 【重要】関係ない歴史を強制的に合流させる
+          echo "Merging with unrelated histories..."
+          git merge upstream/main --allow-unrelated-histories --no-edit
           
           # 自分のリポジトリへ反映
           git push origin main
