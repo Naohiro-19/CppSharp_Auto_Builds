@@ -4,7 +4,7 @@ on:
   schedule:
     # 毎日 UTC 00:00 (日本時間 09:00) に実行
     - cron: '0 0 * * *'
-  workflow_dispatch: # 手動実行も可能にしておくと便利です
+  workflow_dispatch: # 手動実行
 
 jobs:
   sync:
@@ -13,7 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 全履歴を取得（マージに必要）
+          fetch-depth: 0
 
       - name: Sync upstream
         run: |
@@ -26,7 +26,6 @@ jobs:
           git checkout main
           
           echo "Merging with unrelated histories and favoring upstream on conflicts..."
-          # -X theirs を追加して本家を優先する
           git merge upstream/main --allow-unrelated-histories --no-edit -X theirs
           
           git push origin main
