@@ -3,15 +3,22 @@ name: Build and Release CppSharp Binaries (x64 Only)
 on:
   push:
     branches: [ main ]
+  # Sync Upstream ワークフローが完了した時に実行
+  workflow_run:
+    workflows: ["Sync Upstream"]
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  # sync が失敗した場合はビルドしないためのガードを入れる
   build:
     name: Build (x64)
     runs-on: windows-2022
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout repository
@@ -20,7 +27,6 @@ jobs:
       - name: Clone CppSharp Repository
         shell: bash
         run: |
-          # 混乱を避けるため、一旦削除してからクローン（サブモジュール含む）
           rm -rf CppSharp_Source
           git clone --recursive https://github.com/mono/CppSharp.git CppSharp_Source
 
@@ -36,12 +42,9 @@ jobs:
         shell: bash
         run: |
           cd CppSharp_Source/build
-          # 実行権限を付与（念のため）
           chmod +x build.sh
-          
           echo "Generating project files..."
           ./build.sh generate -configuration Release -platform x64
-          
           echo "Compiling CppSharp source code..."
           ./build.sh -configuration Release -platform x64
 
@@ -55,16 +58,13 @@ jobs:
           New-Item -ItemType Directory -Path $staging -Force
 
           Write-Host "Collecting binaries..."
-          # CppSharp_Source内のbinとlibを探索
           $srcPath = "CppSharp_Source"
           
-          # DLL, EXE, LIB, PDBを収集
           Get-ChildItem -Path "$srcPath/bin", "$srcPath/build/lib" -Recurse -Include *.dll, *.exe, *.lib, *.pdb -ErrorAction SilentlyContinue | 
             Copy-Item -Destination $staging -Force
 
-          # 成果物があるか確認
           if ((Get-ChildItem $staging).Count -eq 0) {
-              Write-Error "No binaries found! Build might have failed without throwing an error."
+              Write-Error "No binaries found! Build might have failed."
               exit 1
           }
 
@@ -80,7 +80,7 @@ jobs:
           body: |
             ## CppSharp x64 Automated Build
             - Build Version: v${{ steps.package.outputs.VERSION }}
-            - Based on latest upstream CppSharp
+            - Based on latest upstream CppSharp (Auto-synced)
           files: ${{ steps.package.outputs.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
